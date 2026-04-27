@@ -477,21 +477,24 @@ static void common_params_fit_impl(
             il0 += ngl_per_device[id].n_full();
             for (uint32_t il = il0; il < il0 + ngl_per_device[id].n_part; il++) {
                 if (itbo + 1 >= ntbo) {
-                    tensor_buft_overrides[itbo].pattern = nullptr;
-                    tensor_buft_overrides[itbo].buft    = nullptr;
+                    tensor_buft_overrides[itbo].pattern    = nullptr;
+                    tensor_buft_overrides[itbo].buft       = nullptr;
+                    tensor_buft_overrides[itbo].backend_id = -1;
                     itbo++;
                     mparams.tensor_buft_overrides = tensor_buft_overrides;
                     throw common_params_fit_exception("llama_max_tensor_buft_overrides() == "
                         + std::to_string(ntbo) + " is insufficient for model");
                 }
-                tensor_buft_overrides[itbo].pattern = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
-                tensor_buft_overrides[itbo].buft = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
+                tensor_buft_overrides[itbo].pattern    = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
+                tensor_buft_overrides[itbo].buft       = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
+                tensor_buft_overrides[itbo].backend_id = -1;
                 itbo++;
             }
             il0 += ngl_per_device[id].n_part;
         }
-        tensor_buft_overrides[itbo].pattern = nullptr;
-        tensor_buft_overrides[itbo].buft    = nullptr;
+        tensor_buft_overrides[itbo].pattern    = nullptr;
+        tensor_buft_overrides[itbo].buft       = nullptr;
+        tensor_buft_overrides[itbo].backend_id = -1;
         itbo++;
         mparams.tensor_buft_overrides = tensor_buft_overrides;
     };
@@ -527,8 +530,8 @@ static void common_params_fit_impl(
     if (hp_nex > 0) {
         const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
-        tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft};
-        tensor_buft_overrides[1] = {nullptr, nullptr};
+        tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft, -1};
+        tensor_buft_overrides[1] = {nullptr, nullptr, -1};
         mparams->tensor_buft_overrides = tensor_buft_overrides;
 
         LOG_TRC("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
@@ -549,7 +552,7 @@ static void common_params_fit_impl(
         }
 
         // reset
-        tensor_buft_overrides[0] = {nullptr, nullptr};
+        tensor_buft_overrides[0] = {nullptr, nullptr, -1};
         mparams->tensor_buft_overrides = tensor_buft_overrides;
     }
 
@@ -809,6 +812,25 @@ enum common_params_fit_status common_fit_params(
     const int64_t t1_us = llama_time_us();
     LOG_TRC("%s: fitting params to free memory took %.2f seconds\n", __func__, (t1_us - t0_us) * 1e-6);
     return status;
+}
+
+llama_pshard_plan_registry * common_pshard_registry_create(uint32_t n_tier_max, uint32_t n_seq_max) {
+    return llama_pshard_registry_create(n_tier_max, n_seq_max);
+}
+
+void common_pshard_registry_free(llama_pshard_plan_registry * registry) {
+    llama_pshard_registry_free(registry);
+}
+
+void common_fit_params_pshard(
+        const char * path_model,
+        llama_model_params * mparams,
+        llama_context_params * cparams,
+        llama_model_tensor_buft_override * tensor_buft_overrides,
+        size_t max_vram_mb,
+        size_t fit_target_mb) {
+    llama_params_fit_pshard(path_model, mparams, cparams, tensor_buft_overrides,
+        max_vram_mb, fit_target_mb);
 }
 
 void common_memory_breakdown_print(const struct llama_context * ctx) {
