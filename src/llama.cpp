@@ -9,6 +9,7 @@
 #include "llama-model-loader.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
+#include "llama-pshard-plan.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
@@ -23,6 +24,8 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <map>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -349,6 +352,8 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
             return {0, model_ptr.release()};
         }
 
+        ml.force_duplicate_tied = params.pshard;
+
         if (!model->load_tensors(ml)) {
             return {-2, nullptr};
         }
@@ -600,4 +605,3 @@ const char * llama_print_system_info(void) {
 
     return s.c_str();
 }
-

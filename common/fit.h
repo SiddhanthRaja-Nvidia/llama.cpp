@@ -26,6 +26,22 @@ common_params_fit_status common_fit_params(
                            uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
                      ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
 
+// Pipelined-sharding (pshard) variant of common_fit_params.
+//
+// Probes VRAM for each strategy/tier combination, picks the best plan and fills
+// tensor_buft_overrides for model loading. Results are cached next to the model
+// as <model>.tensor_overrides.pshard_registry. If everything already fits in
+// VRAM this clears mparams->pshard and falls back to baseline loading.
+//
+// mparams->pshard_registry must be set by the caller (llama_pshard_registry_create).
+void common_fit_params_pshard(
+                         const char * path_model,
+                 llama_model_params * mparams,
+               llama_context_params * cparams,
+   llama_model_tensor_buft_override * tensor_buft_overrides,
+                             size_t   max_vram_mb,    // 0 = use actual free VRAM minus fit_target_mb
+                             size_t   fit_target_mb); // ignored when max_vram_mb > 0
+
 // print estimated memory to stdout
 void common_fit_print(
                          const char * path_model,

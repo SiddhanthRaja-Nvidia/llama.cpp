@@ -300,6 +300,7 @@ extern "C" {
     struct llama_model_tensor_buft_override {
         const char * pattern;
         ggml_backend_buffer_type_t buft;
+        int32_t backend_id;
     };
 
     struct llama_model_params {
@@ -336,6 +337,11 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+        bool pshard;          // enable pipelined sharding: weights on CPU host, pipelined to GPU per split
+        bool pshard_delegate_compute; // tensor overrides choose storage; scheduler chooses compute backends
+        bool pshard_cache_skip_load; // skip loading plan cache (rebuild from scratch, then overwrite)
+        size_t max_vram_alloc; // VRAM budget in MiB for the unified preload buffer (0 = auto from free VRAM)
+        struct llama_pshard_plan_registry * pshard_registry; // tier plan registry, caller-owned. populated by llama_params_fit_pshard
     };
 
     struct llama_sampler_seq_config {
@@ -404,6 +410,8 @@ extern "C" {
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_other;
+
+        bool pshard;          // enable pipelined sharding for this context (3 GPU backends, split callbacks)
     };
 
     struct llama_model_tensor_override {

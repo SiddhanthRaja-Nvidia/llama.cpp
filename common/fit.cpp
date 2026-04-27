@@ -527,8 +527,8 @@ static void common_params_fit_impl(
     if (hp_nex > 0) {
         const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
-        tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft};
-        tensor_buft_overrides[1] = {nullptr, nullptr};
+        tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft, -1};
+        tensor_buft_overrides[1] = {nullptr, nullptr, -1};
         mparams->tensor_buft_overrides = tensor_buft_overrides;
 
         LOG_TRC("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
@@ -549,7 +549,7 @@ static void common_params_fit_impl(
         }
 
         // reset
-        tensor_buft_overrides[0] = {nullptr, nullptr};
+        tensor_buft_overrides[0] = {nullptr, nullptr, -1};
         mparams->tensor_buft_overrides = tensor_buft_overrides;
     }
 
@@ -809,6 +809,28 @@ enum common_params_fit_status common_fit_params(
     const int64_t t1_us = llama_time_us();
     LOG_TRC("%s: fitting params to free memory took %.2f seconds\n", __func__, (t1_us - t0_us) * 1e-6);
     return status;
+}
+
+// Adapter handed to the pshard planner in libllama, which cannot call into
+// common/ directly. Throws on failure, same as common_params_fit_impl.
+static void common_fit_pshard_baseline(
+        const char * path_model, llama_model_params * mparams, llama_context_params * cparams,
+        float * tensor_split, llama_model_tensor_buft_override * tensor_buft_overrides,
+        size_t * margins, uint32_t n_ctx_min, ggml_log_level log_level,
+        void * /*user_data*/) {
+    common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides,
+        margins, n_ctx_min, log_level);
+}
+
+void common_fit_params_pshard(
+        const char * path_model,
+        llama_model_params * mparams,
+        llama_context_params * cparams,
+        llama_model_tensor_buft_override * tensor_buft_overrides,
+        size_t max_vram_mb,
+        size_t fit_target_mb) {
+    llama_params_fit_pshard(path_model, mparams, cparams, tensor_buft_overrides,
+        max_vram_mb, fit_target_mb, &common_fit_pshard_baseline, /*fit_fn_ud =*/ nullptr);
 }
 
 void common_memory_breakdown_print(const struct llama_context * ctx) {
