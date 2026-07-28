@@ -1219,7 +1219,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    if (params.fit_params) {
+    auto fit_params = [&]() {
         COM_TRC("%s", "fitting params to device memory ...\n");
         COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
         common_fit_params(params.model.path.c_str(), &mparams, &cparams,
@@ -1228,6 +1228,30 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
             params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+    };
+
+    if (params.pshard) {
+        LOG_INF("%s: pshard enabled, probing and loading plan cache\n", __func__);
+        params.tensor_buft_overrides.resize(4096);
+        mparams.pshard_registry = common_pshard_registry_create(params.pshard_tier_max, cparams.n_seq_max);
+        const size_t fit_target_mb = params.fit_params_target.empty() ? 0 : params.fit_params_target[0] / (1024 * 1024);
+        common_fit_params_pshard(params.model.path.c_str(), &mparams, &cparams,
+            params.tensor_buft_overrides.data(), params.max_vram_alloc, fit_target_mb);
+        if (!mparams.pshard) {
+            LOG_WRN("%s: pshard not active for this configuration\n", __func__);
+            common_pshard_registry_free(mparams.pshard_registry);
+            mparams.pshard_registry = nullptr;
+            if (params.fit_params) {
+                fit_params();
+            }
+        } else {
+            params.n_batch  = (int32_t) cparams.n_batch;
+            params.n_ubatch = (int32_t) cparams.n_ubatch;
+            LOG_INF("%s: pshard runtime batch/ubatch set to selected cache_ubatch=%u\n",
+                __func__, cparams.n_ubatch);
+        }
+    } else if (params.fit_params) {
+        fit_params();
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
@@ -1581,6 +1605,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
 
+    mparams.pshard          = params.pshard;
     mparams.max_vram_alloc  = params.max_vram_alloc;
     return mparams;
 }
@@ -1619,6 +1644,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
+    cparams.pshard            = params.pshard;
 
     return cparams;
 }

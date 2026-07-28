@@ -59,6 +59,17 @@ struct llama_pshard_override {
     int32_t                    backend_id;
 };
 
+// saved allocator and backend ids for plan switches
+struct llama_pshard_alloc_state {
+    std::vector<uint8_t> node_allocs;
+    std::vector<uint8_t> leaf_allocs;
+    std::vector<int>     node_backend_ids;
+    std::vector<int>     leaf_backend_ids;
+    int  n_nodes = 0;
+    int  n_leafs = 0;
+    bool valid   = false;
+};
+
 struct llama_pshard_plan {
     llama_pshard_strategy strategy       = LLAMA_PSHARD_STATIC_ATTNPRIO_ALLMODELS;
     uint32_t             batch_size      = 0;
@@ -75,6 +86,16 @@ struct llama_pshard_plan {
     size_t cache_measured   = 0;
     float  tps              = 0.0f;  // predicted tokens/sec (0 = no benchmark data)
     bool   is_viable        = false;
+
+    // cached maps and offsets from first apply
+    mutable std::unordered_map<std::string, int32_t> cached_tensor_bids;
+    mutable std::unordered_map<int, int32_t>         cached_layer_bids;
+    mutable std::unordered_map<std::string, size_t>  cached_weight_offsets;
+    mutable size_t cached_scratch_off = 0;
+    mutable bool   maps_cached       = false;
+    mutable bool   addrs_cached      = false;
+
+    mutable llama_pshard_alloc_state alloc_state;
 };
 
 enum llama_layer_fraction {
@@ -87,8 +108,24 @@ enum llama_layer_fraction {
 
 const char * llama_get_overflow_pattern(size_t il, llama_layer_fraction lf);
 
-// llama_device_memory_data / llama_memory_breakdown_data come from llama-ext.h
-// (included via llama-context.h)
+// Override generation. The planning and inference stages DIVERGE here: the planner
+// emits gpu_buft for pinned layers, the runtime emits host_buft, and the planner adds
+// override-array bounds assertions. Both variants are kept verbatim so the difference
+// stays visible; reconciling them is deliberately a separate change.
+//   _planning  -> llama-pshard-plan.cpp  (file-local, used by the tier search)
+//   _inference -> llama-pshard-cache.cpp (used when applying a cached plan)
+void llama_pshard_generate_overrides_inference(
+        uint32_t n_pinned,
+        uint32_t n_layers,
+        ggml_backend_buffer_type_t gpu_buft,
+        ggml_backend_buffer_type_t host_buft,
+        struct llama_model_tensor_buft_override * tensor_buft_overrides,
+        llama_layer_fraction overflow_type,
+        llama_pshard_strategy strategy,
+        const pshard_dev_layout & layout,
+        bool pin_from_back = false,
+        bool output_on_gpu = false,
+        uint32_t n_attn_pinned = 0);
 
 // probe hook runs before context teardown
 // used by TPS prediction to inspect scheduler splits
@@ -105,8 +142,13 @@ std::vector<llama_device_memory_data> llama_get_device_memory_data(
         uint32_t probe_n_tokens = 0,
         uint32_t probe_n_outputs = 0);
 
-// llama_pshard_fit_fn and llama_params_fit_pshard() are declared in llama-ext.h
-// so that common/ and tools/ can reach them without touching the public llama.h
+// llama_device_memory_data / llama_memory_breakdown_data come from llama-ext.h
+// (included via llama-context.h)
+//
+// llama_pshard_fit_fn, llama_params_fit_pshard_inference() (runtime),
+// llama_params_fit_pshard_planning() (planner) and llama_pshard_registry_create/free()
+// are declared in llama-ext.h so common/ and tools/ can reach them without
+// touching the public llama.h
 
 // plan cache serialization. fingerprint covers only runtime plan-compatibility params
 // so the planner binary and the runtime binary can share the same cache file.
@@ -116,12 +158,22 @@ uint64_t pshard_registry_fingerprint(
         const struct llama_context_params * cparams,
         int64_t model_file_size);
 
+// planner-only: writes/updates the registry file
 bool pshard_registry_save(
         const struct llama_pshard_plan_registry * registry, uint64_t fingerprint,
         const char * cache_path, ggml_backend_buffer_type_t host_buft,
         const struct llama_context_params * cparams = nullptr);
 
-bool pshard_registry_load(
+
+// Registry load. The two stages DIVERGE only in diagnostics and in where the
+// cache_ubatch==0 fallback is applied (the runtime re-applies it in its entry point).
+// Both variants are kept verbatim so the difference stays visible.
+bool pshard_registry_load_planning(
+        struct llama_pshard_plan_registry * registry, uint64_t fingerprint,
+        const char * cache_path, ggml_backend_buffer_type_t host_buft,
+        size_t current_budget, bool require_exact_budget = false);
+
+bool pshard_registry_load_inference(
         struct llama_pshard_plan_registry * registry, uint64_t fingerprint,
         const char * cache_path, ggml_backend_buffer_type_t host_buft,
         size_t current_budget, bool require_exact_budget = false);
@@ -190,5 +242,31 @@ struct llama_pshard_plan_registry {
 
     llama_pshard_plan * get_best(size_t tier) {
         return best_plans[tier].is_viable ? &best_plans[tier] : nullptr;
+    }
+
+    // pick the prefill ubatch with the lowest predicted ttft
+    // use max_ubatch when TPS data is missing
+    uint32_t find_optimal_ubatch(uint32_t n_prompt, uint32_t max_ubatch) const {
+        uint32_t best_ub  = max_ubatch;
+        double   best_time = 1e30;
+
+        for (size_t t = 0; t < tier_sizes.size(); t++) {
+            uint32_t ts = tier_sizes[t];
+            if (ts < 512 || ts > max_ubatch) continue;
+
+            const auto & plan = best_plans[t];
+            if (!plan.is_viable || plan.tps <= 0.0f) continue;
+
+            double per_iter = (double)ts / (double)plan.tps;
+            uint32_t n_iters = (n_prompt + ts - 1) / ts;
+            double total = n_iters * per_iter;
+
+            if (total < best_time) {
+                best_time = total;
+                best_ub   = ts;
+            }
+        }
+
+        return best_ub;
     }
 };

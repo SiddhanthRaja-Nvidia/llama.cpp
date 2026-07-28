@@ -743,6 +743,7 @@ struct common_params {
     void *                  load_progress_callback_user_data = NULL;
     bool no_alloc = false; // Don't allocate model buffers
 
+    bool     pshard           = false;
     size_t   max_vram_alloc   = 0;
     uint32_t pshard_tier_max  = 0;
 };

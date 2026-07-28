@@ -28,12 +28,19 @@ common_params_fit_status common_fit_params(
 
 // Pipelined-sharding (pshard) variant of common_fit_params.
 //
-// Probes VRAM for each strategy/tier combination, picks the best plan and fills
-// tensor_buft_overrides for model loading. Results are cached next to the model
-// as <model>.tensor_overrides.pshard_registry. If everything already fits in
-// VRAM this clears mparams->pshard and falls back to baseline loading.
+// Loads the plan registry cached next to the model as
+// <model>.tensor_overrides.pshard_registry (written by llama-fit-params --pshard)
+// and fills tensor_buft_overrides for model loading. If no usable plan applies,
+// clears mparams->pshard and leaves baseline loading in place. This is the
+// RUNTIME path - it never plans, so startup stays fast.
 //
-// mparams->pshard_registry must be set by the caller (llama_pshard_registry_create).
+// mparams->pshard_registry must be set by the caller (common_pshard_registry_create).
+//
+// Create/free the tier plan registry. The caller owns the pointer and assigns it
+// to mparams->pshard_registry before calling common_fit_params_pshard.
+struct llama_pshard_plan_registry * common_pshard_registry_create(uint32_t n_tier_max, uint32_t n_seq_max);
+void                                common_pshard_registry_free  (struct llama_pshard_plan_registry * registry);
+
 void common_fit_params_pshard(
                          const char * path_model,
                  llama_model_params * mparams,
@@ -41,6 +48,24 @@ void common_fit_params_pshard(
    llama_model_tensor_buft_override * tensor_buft_overrides,
                              size_t   max_vram_mb,    // 0 = use actual free VRAM minus fit_target_mb
                              size_t   fit_target_mb); // ignored when max_vram_mb > 0
+
+// PLANNER path (llama-fit-params --pshard).
+//
+// Probes VRAM for each strategy/tier combination, picks the best plan per tier and
+// writes/updates <model>.tensor_overrides.pshard_registry, then fills
+// tensor_buft_overrides. Loads any already-cached tiers first and only plans what is
+// missing. If everything already fits in VRAM it clears mparams->pshard and falls back
+// to baseline loading.
+//
+// Supplies the baseline params-fitting engine (common_fit_params) to the planner, which
+// lives in libllama and cannot call into common/ directly.
+void common_pshard_plan(
+                         const char * path_model,
+                 llama_model_params * mparams,
+               llama_context_params * cparams,
+   llama_model_tensor_buft_override * tensor_buft_overrides,
+                             size_t   max_vram_mb,
+                             size_t   fit_target_mb);
 
 // print estimated memory to stdout
 void common_fit_print(

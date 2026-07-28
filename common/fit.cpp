@@ -477,21 +477,24 @@ static void common_params_fit_impl(
             il0 += ngl_per_device[id].n_full();
             for (uint32_t il = il0; il < il0 + ngl_per_device[id].n_part; il++) {
                 if (itbo + 1 >= ntbo) {
-                    tensor_buft_overrides[itbo].pattern = nullptr;
-                    tensor_buft_overrides[itbo].buft    = nullptr;
+                    tensor_buft_overrides[itbo].pattern    = nullptr;
+                    tensor_buft_overrides[itbo].buft       = nullptr;
+                    tensor_buft_overrides[itbo].backend_id = -1;
                     itbo++;
                     mparams.tensor_buft_overrides = tensor_buft_overrides;
                     throw common_params_fit_exception("llama_max_tensor_buft_overrides() == "
                         + std::to_string(ntbo) + " is insufficient for model");
                 }
-                tensor_buft_overrides[itbo].pattern = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
-                tensor_buft_overrides[itbo].buft = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
+                tensor_buft_overrides[itbo].pattern    = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
+                tensor_buft_overrides[itbo].buft       = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
+                tensor_buft_overrides[itbo].backend_id = -1;
                 itbo++;
             }
             il0 += ngl_per_device[id].n_part;
         }
-        tensor_buft_overrides[itbo].pattern = nullptr;
-        tensor_buft_overrides[itbo].buft    = nullptr;
+        tensor_buft_overrides[itbo].pattern    = nullptr;
+        tensor_buft_overrides[itbo].buft       = nullptr;
+        tensor_buft_overrides[itbo].backend_id = -1;
         itbo++;
         mparams.tensor_buft_overrides = tensor_buft_overrides;
     };
@@ -811,6 +814,14 @@ enum common_params_fit_status common_fit_params(
     return status;
 }
 
+llama_pshard_plan_registry * common_pshard_registry_create(uint32_t n_tier_max, uint32_t n_seq_max) {
+    return llama_pshard_registry_create(n_tier_max, n_seq_max);
+}
+
+void common_pshard_registry_free(llama_pshard_plan_registry * registry) {
+    llama_pshard_registry_free(registry);
+}
+
 // Adapter handed to the pshard planner in libllama, which cannot call into
 // common/ directly. Throws on failure, same as common_params_fit_impl.
 static void common_fit_pshard_baseline(
@@ -829,7 +840,18 @@ void common_fit_params_pshard(
         llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t max_vram_mb,
         size_t fit_target_mb) {
-    llama_params_fit_pshard(path_model, mparams, cparams, tensor_buft_overrides,
+    llama_params_fit_pshard_inference(path_model, mparams, cparams, tensor_buft_overrides,
+        max_vram_mb, fit_target_mb);
+}
+
+void common_pshard_plan(
+        const char * path_model,
+        llama_model_params * mparams,
+        llama_context_params * cparams,
+        llama_model_tensor_buft_override * tensor_buft_overrides,
+        size_t max_vram_mb,
+        size_t fit_target_mb) {
+    llama_params_fit_pshard_planning(path_model, mparams, cparams, tensor_buft_overrides,
         max_vram_mb, fit_target_mb, &common_fit_pshard_baseline, /*fit_fn_ud =*/ nullptr);
 }
 

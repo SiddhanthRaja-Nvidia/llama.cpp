@@ -214,7 +214,7 @@ static void plan_pshard_context(common_params & params, uint32_t n_ctx, uint32_t
     } else {
         LOG_INF("%s: planning pshard tensor overrides for n_ctx=%u tier_max=%u...\n", __func__, n_ctx, tier_max);
     }
-    common_fit_params_pshard(params.model.path.c_str(), &mparams, &cparams,
+    common_pshard_plan(params.model.path.c_str(), &mparams, &cparams,
         params.tensor_buft_overrides.data(), params.max_vram_alloc, fit_target_mb);
 
     llama_pshard_registry_free(mparams.pshard_registry);
