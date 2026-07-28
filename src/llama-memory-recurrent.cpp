@@ -104,7 +104,10 @@ llama_memory_recurrent::llama_memory_recurrent(
         };
 
         const int32_t cpu_bid = pshard_dev_layout::compute_cpu_backend_id(model.devices.size());
-        if (!pipe_shard_rs->init(specs, model.get_layer_backend_ids(), cpu_bid, hparams.no_alloc, model.get_dev_preload_buf())) {
+        // no_alloc == planner probe: there is no runtime pshard_pack_cache_region() to assign
+        // addresses later, so pass no external buffer and let init() allocate eagerly.
+        ggml_backend_buffer_t preload_buf = hparams.no_alloc ? nullptr : model.get_dev_preload_buf();
+        if (!pipe_shard_rs->init(specs, model.get_layer_backend_ids(), cpu_bid, hparams.no_alloc, preload_buf)) {
             throw std::runtime_error("failed to initialize RS pipe shard");
         }
 

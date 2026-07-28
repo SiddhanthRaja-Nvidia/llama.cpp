@@ -76,11 +76,24 @@ struct llama_memory_pshard : llama_memory_pipe_shard_i {
 
     void refresh_stream_views(int32_t il) override;
 
+    // dispatches to the _planning / _inference variant based on external_buf
     void assign_tensors(
             ggml_backend_sched_t sched,
             const std::unordered_map<int, int32_t> & layer_bids,
             const std::vector<ggml_backend_ptr> & backends,
             const pshard_dev_layout & layout) override;
+
+    void assign_tensors_planning(
+            ggml_backend_sched_t sched,
+            const std::unordered_map<int, int32_t> & layer_bids,
+            const std::vector<ggml_backend_ptr> & backends,
+            const pshard_dev_layout & layout);
+
+    void assign_tensors_inference(
+            ggml_backend_sched_t sched,
+            const std::unordered_map<int, int32_t> & layer_bids,
+            const std::vector<ggml_backend_ptr> & backends,
+            const pshard_dev_layout & layout);
 
     size_t current_pinned_size() const override;
 

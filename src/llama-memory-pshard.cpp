@@ -551,7 +551,58 @@ void llama_memory_pshard::download_for_switch(int32_t il, ggml_backend_t be) {
     }
 }
 
+// The planning and inference stages DIVERGE here. Planning dispatches purely on the plan's
+// backend_id map and has no notion of pinned layers; inference dispatches on l.is_pinned and
+// requires GPU addresses that only exist after pshard_pack_cache_region(), which the planner
+// never calls. Both variants are kept verbatim so the difference stays visible.
+//
+// external_buf is the discriminator: it is set only on the runtime path (it is what defers
+// address assignment to pack_cache_region in init()), and null during planner probes.
 void llama_memory_pshard::assign_tensors(
+        ggml_backend_sched_t sched,
+        const std::unordered_map<int, int32_t> & layer_bids,
+        const std::vector<ggml_backend_ptr> & backends,
+        const pshard_dev_layout & layout) {
+    if (external_buf) {
+        assign_tensors_inference(sched, layer_bids, backends, layout);
+    } else {
+        assign_tensors_planning(sched, layer_bids, backends, layout);
+    }
+}
+
+// planning: bid-driven, no pinned-layer concept, no GPU-address precondition
+void llama_memory_pshard::assign_tensors_planning(
+        ggml_backend_sched_t sched,
+        const std::unordered_map<int, int32_t> & layer_bids,
+        const std::vector<ggml_backend_ptr> & backends,
+        const pshard_dev_layout & layout) {
+    for (auto & l : layers) {
+        auto it = layer_bids.find((int)l.il);
+        const bool has_bid = it != layer_bids.end() && it->second >= 0 && it->second < (int32_t)backends.size();
+        if (!has_bid) {
+            continue;
+        }
+        const int32_t bid = it->second;
+        if (bid == layout.compute) {
+            activate_gpu(l.il);
+        } else if (bid == layout.cpu) {
+            activate_cpu(l.il);
+        } else {
+            activate_gpu(l.il);
+            l.t1_gpu->data = NULL; l.t1_gpu->buffer = NULL;
+            ggml_backend_sched_set_tensor_backend(sched, l.t1_gpu, backends[bid].get());
+            ggml_backend_sched_add_writeback(sched, l.t1_gpu);
+            if (l.t2_gpu) {
+                l.t2_gpu->data = NULL; l.t2_gpu->buffer = NULL;
+                ggml_backend_sched_set_tensor_backend(sched, l.t2_gpu, backends[bid].get());
+                ggml_backend_sched_add_writeback(sched, l.t2_gpu);
+            }
+        }
+    }
+}
+
+// inference: pinned-layer aware, expects addresses assigned by pshard_pack_cache_region()
+void llama_memory_pshard::assign_tensors_inference(
         ggml_backend_sched_t sched,
         const std::unordered_map<int, int32_t> & layer_bids,
         const std::vector<ggml_backend_ptr> & backends,
