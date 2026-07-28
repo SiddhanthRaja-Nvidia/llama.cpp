@@ -390,7 +390,7 @@ static const cmd_params cmd_params_defaults = {
     /* flash_attn           */ { LLAMA_FLASH_ATTN_TYPE_AUTO },
     /* devices              */ { {} },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
-    /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
+    /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr, -1 } } },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
     /* no_host              */ { false },
@@ -955,7 +955,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 do {
                     if (override_group_span_len == 0) {
                         // Adds an empty override-tensors for an empty span
-                        params.tensor_buft_overrides.push_back({{}});
+                        params.tensor_buft_overrides.push_back({{nullptr, nullptr, -1}});
                         if (value[override_group_span_len] == '\0') {
                             value = &value[override_group_span_len];
                             last_group = true;
@@ -1005,13 +1005,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                             invalid_param = true;
                             break;
                         }
-                        group_tensor_buft_overrides.push_back({tensor_name, buft_list.at(buffer_type)});
+                        group_tensor_buft_overrides.push_back({tensor_name, buft_list.at(buffer_type), -1});
                         override_span_len = std::strcspn(override_group, ";");
                     }
                     if (invalid_param) {
                         break;
                     }
-                    group_tensor_buft_overrides.push_back({nullptr,nullptr});
+                    group_tensor_buft_overrides.push_back({nullptr, nullptr, -1});
                     params.tensor_buft_overrides.push_back(group_tensor_buft_overrides);
                     override_group_span_len = std::strcspn(value, ",");
                 } while (!last_group);
@@ -1267,10 +1267,10 @@ struct cmd_params_instance {
             for (int i = 0; i < n_cpu_moe; ++i) {
                 patterns.push_back(llm_ffn_exps_block_regex(i));
                 merged.push_back({ patterns.back().c_str(),
-                                ggml_backend_cpu_buffer_type() });
+                                ggml_backend_cpu_buffer_type(), -1 });
             }
 
-            merged.push_back({ nullptr, nullptr });
+            merged.push_back({ nullptr, nullptr, -1 });
 
             mparams.tensor_buft_overrides = merged.data();
         }
